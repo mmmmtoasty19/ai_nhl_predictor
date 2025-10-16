@@ -98,132 +98,28 @@ class NHLPredictorAgent:
     # TOOL METHODS
     # ===================
 
-    def fetch_team_standings(self):
+    def fetch_games_by_date(self, date: str | None = None):
         """
-        Fetches all NHL teams and their current standings from the NHL API.
-        Stores data in both the cache (for quick access) and database (for persistence).
+        Get games scheduled for a specific date
+
+        Args:
+            date (str, optional): Date in 'YYYY-MM-DD' format.
+                                If None, defaults to today.
 
         Returns:
-            teams_cached: The in memory storage for team standings
+            int: Number of games stored
         """
-        console.print("[green]Fetching team standings from NHL API...[/green]")
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
 
-        url = f"{self.nhl_api_base}/v1/standings/now"
-        console.print(f"URL: {url}")
-
-        # Make API Request
-        try:
-            response = requests.get(url, timeout=10)
-
-            if response.status_code != 200:
-                console.print(
-                    f"[red] Error: API returned status code {response.status_code}[/red]"
-                )
-                return None
-
-            data = response.json()
-            console.print("[green]Successfully received data from API[/green]")
-        except requests.exceptions.Timeout:
-            console.print("[red]Error: request timed out[/red]")
-            return None
-        except requests.exceptions.RequestException as e:
-            console.print(f"[red]Error making request: {e}[/red]")
-
-        # Parse the Data
-
-        if "standings" not in data:
-            console.print("[red]Error: 'standings' key not found in API response[/red]")
-            console.print("   Available keys:", list(data.keys()))
-            return None
-
-        teams_data = data["standings"]
-        console.print(f"Found {len(teams_data)} teams in standings")
-
-        # Extract and store
-        cur = self.db_connection.cursor()
-        teams_stored = 0
-
-        for team in teams_data:
-            try:
-                # API nests data in default keys
-                # Extract the info from nested data
-                team_abv = team.get("teamAbbrev", {})
-                if isinstance(team_abv, dict):
-                    team_abv = team_abv.get("default", "UNK")
-
-                team_name = team.get("teamName", {})
-                if isinstance(team_name, dict):
-                    team_name = team_name.get("default", "Unkown")
-                else:
-                    team_name = str(team_name)
-
-                conference = team.get("conferenceName", "Unknown")
-                division = team.get("divisionName", "Unknown")
-
-                wins = team.get("wins", 0)
-                losses = team.get("losses", 0)
-                ot_losses = team.get("otLosses", 0)
-                points = team.get("points", 0)
-
-                # creating ID using the abbrevation
-                team_id = abs(hash(team_abv)) % (10**8)
-
-                # Store in Cache
-                self.teams_cache[team_abv] = {
-                    "id": team_id,
-                    "name": team_name,
-                    "abbrev": team_abv,
-                    "conference": conference,
-                    "division": division,
-                    "wins": wins,
-                    "losses": losses,
-                    "ot_losses": ot_losses,
-                    "points": points,
-                }
-
-                # Store in DB
-
-                cur.execute(
-                    """
-                    INSERT OR REPLACE INTO teams
-                    (team_id, team_name, abbreviation, conference, division)
-                    VALUES (?, ?, ?, ?, ?)
-                """,
-                    (team_id, team_name, team_abv, conference, division),
-                )
-                teams_stored += 1
-            except Exception as e:
-                console.print(f"[red] Warning: Cound not process team: {e}")
-                continue
-        self.db_connection.commit()
-
-        console.print(f"Successfully stored {teams_stored} teams")
-        console.print(f"    - In cache: {len(self.teams_cache)} teams")
-        console.print(f"    - In database: {teams_stored} teams")
-
-        return self.teams_cache
-
-    def fetch_todays_games(self):
-        """
-        TOOL: Get games scheduled for today
-
-        STEPS:
-        1. Get today's date
-        2. Call NHL schedule API
-        3. Extract game information
-        4. Store games in database
-        5. Return list of games
-        """
-        current_date = datetime.now().strftime("%Y-%m-%d")
-
-        url = f"{self.nhl_api_base}/v1/schedule/{current_date}"
+        url = f"{self.nhl_api_base}/v1/schedule/{date}"
         console.print(f"URL: {url}")
 
         try:
             response = requests.get(url, timeout=10)
             if response.status_code != 200:
                 console.print(
-                    f"[red] Error: API returned status code {response.status_code}[/red]"
+                    f"[red]Error: API returned status code {response.status_code}[/red]"
                 )
                 return None
 
@@ -235,13 +131,229 @@ class NHLPredictorAgent:
             console.print(f"[red]Error making request: {e}[/red]")
 
         todays_data = [
-            day for day in data.get("gameWeek", []) if day.get("date") == current_date
+            day for day in data.get("gameWeek", []) if day.get("date") == date
         ]
 
-        todays_games = todays_data[0].get("games", []) if todays_data else []
+        if not todays_data:
+            console.print("[yellow]No games scheduled for today[/yellow]")
+            return 0
 
-        with open("sample_schedule.json", "w") as f:
-            json.dump(todays_games, f, indent=2)
+        todays_games = todays_data[0].get("games", [])
+        # TODO change this to only show if pulling todays games not historical
+        console.print(f"Found {len(todays_games)} games today!")
+
+        cur = self.db_connection.cursor()
+        games_stored = 0
+
+        for game in todays_games:
+            try:
+                # Extract game info
+                game_id = game.get("id")
+                game_date = date
+
+                # Extract HOME team
+                home_team = game.get("homeTeam", {})
+                home_id = home_team.get("id")
+                home_abbrev = home_team.get("abbrev")
+                home_place = home_team.get("placeName", {}).get("default", "Unknown")
+                home_common = home_team.get("commonName", {}).get("default", "")
+                home_name = f"{home_place} {home_common}".strip()
+
+                # Extract AWAY team
+                away_team = game.get("awayTeam", {})
+                away_id = away_team.get("id")
+                away_abbrev = away_team.get("abbrev")
+                away_place = away_team.get("placeName", {}).get("default", "Unknown")
+                away_common = away_team.get("commonName", {}).get("default", "")
+                away_name = f"{away_place} {away_common}".strip()
+
+                # INSERT OR IGNORE teams (creates if doesn't exist, skips if exists)
+                cur.execute(
+                    """
+                    INSERT OR IGNORE INTO teams 
+                    (team_id, team_name, abbreviation)
+                    VALUES (?, ?, ?)
+                """,
+                    (home_id, home_name, home_abbrev),
+                )
+
+                cur.execute(
+                    """
+                    INSERT OR IGNORE INTO teams 
+                    (team_id, team_name, abbreviation)
+                    VALUES (?, ?, ?)
+                """,
+                    (away_id, away_name, away_abbrev),
+                )
+
+                # Game state
+                # Game state
+                game_state_raw = game.get("gameState", "FUT")
+                if game_state_raw == "FUT":
+                    game_state = "scheduled"
+                elif game_state_raw == "LIVE":
+                    game_state = "live"
+                elif game_state_raw in ["FINAL", "OFF"]:
+                    game_state = "final"
+                else:
+                    game_state = "scheduled"
+
+                # Scores (None for scheduled games)
+                home_score = home_team.get("score")
+                away_score = away_team.get("score")
+
+                # Determine winner
+                winner_id = None
+                if (
+                    game_state == "final"
+                    and home_score is not None
+                    and away_score is not None
+                ):
+                    winner_id = home_id if home_score > away_score else away_id
+
+                # Store game
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO games
+                    (game_id, game_date, home_team_id, away_team_id, 
+                    home_score, away_score, game_state, winner_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        game_id,
+                        game_date,
+                        home_id,
+                        away_id,
+                        home_score,
+                        away_score,
+                        game_state,
+                        winner_id,
+                    ),
+                )
+
+                games_stored += 1
+                console.print(f"  {away_abbrev} @ {home_abbrev} - {game_state}")
+            except Exception as e:
+                console.print(f"[red]Warning: Could not process game: {e}[/red]")
+                continue
+
+        self.db_connection.commit()
+        console.print(f"[green]Successfully stored {games_stored} games[/green]")
+
+        return games_stored
+
+    def enrich_teams_with_standings(self):
+        """
+        Enrich existing team records with conference, division, and current stats
+        Run this AFTER fetch_todays_games() or any game fetching
+
+        Returns:
+            dict: teams_cache with updated info
+        """
+        console.print("[green]Enriching teams with standings data...[/green]")
+
+        url = f"{self.nhl_api_base}/v1/standings/now"
+        console.print(f"URL: {url}")
+
+        # Make API request
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code != 200:
+                console.print(
+                    f"[red]Error: API returned status code {response.status_code}[/red]"
+                )
+                return None
+
+            data = response.json()
+            console.print("[green]Successfully received standings data[/green]")
+
+        except requests.exceptions.Timeout:
+            console.print("[red]Error: request timed out[/red]")
+            return None
+        except requests.exceptions.RequestException as e:
+            console.print(f"[red]Error making request: {e}[/red]")
+            return None
+
+        # Parse standings data/
+        if "standings" not in data:
+            console.print("[red]Error: 'standings' key not found in API response[/red]")
+            return None
+
+        teams_data = data["standings"]
+        console.print(f"Found standings for {len(teams_data)} teams")
+
+        cursor = self.db_connection.cursor()
+        teams_updated = 0
+
+        for team in teams_data:
+            try:
+                # Extract team info
+                team_abbrev = team.get("teamAbbrev", {})
+                if isinstance(team_abbrev, dict):
+                    team_abbrev = team_abbrev.get("default", "UNK")
+
+                conference = team.get("conferenceName", "Unknown")
+                division = team.get("divisionName", "Unknown")
+
+                wins = team.get("wins", 0)
+                losses = team.get("losses", 0)
+                ot_losses = team.get("otLosses", 0)
+                points = team.get("points", 0)
+
+                # UPDATE existing team with conference/division
+                cursor.execute(
+                    """
+                    UPDATE teams 
+                    SET conference = ?, division = ?
+                    WHERE abbreviation = ?
+                """,
+                    (conference, division, team_abbrev),
+                )
+
+                # Update/create cache entry
+                if team_abbrev not in self.teams_cache:
+                    # Get team_id from database
+                    cursor.execute(
+                        """
+                        SELECT team_id, team_name 
+                        FROM teams 
+                        WHERE abbreviation = ?
+                    """,
+                        (team_abbrev,),
+                    )
+                    result = cursor.fetchone()
+                    team_id = result[0] if result else None
+                    team_name = result[1] if result else "Unknown"
+
+                    self.teams_cache[team_abbrev] = {
+                        "id": team_id,
+                        "name": team_name,
+                        "abbrev": team_abbrev,
+                    }
+
+                # Update cache with standings info
+                self.teams_cache[team_abbrev].update(
+                    {
+                        "conference": conference,
+                        "division": division,
+                        "wins": wins,
+                        "losses": losses,
+                        "ot_losses": ot_losses,
+                        "points": points,
+                    }
+                )
+
+                teams_updated += 1
+
+            except Exception as e:
+                console.print(f"[red]Warning: Could not process team: {e}[/red]")
+                continue
+
+        self.db_connection.commit()
+        console.print(f"[green]Successfully enriched {teams_updated} teams[/green]")
+        console.print(f"    - Cache now has {len(self.teams_cache)} teams")
+
+        return self.teams_cache
 
     def fetch_team_recent_games(self, team_id, num_games=5):
         """
@@ -347,9 +459,14 @@ def main():
     # Create agent instance
     agent = NHLPredictorAgent()
 
+    console.print("\n[cyan]Step 1: Fetching today's games...[/cyan]")
     console.print("[blue]=[/blue]" * 50)
+    agent.fetch_games_by_date()
 
-    agent.fetch_team_standings()
+    console.print("\n[cyan]Step 2: Enriching teams with standings...[/cyan]")
+    console.print("[blue]=[/blue]" * 50)
+    agent.enrich_teams_with_standings()
+
     # Clean up
     agent.close()
 
