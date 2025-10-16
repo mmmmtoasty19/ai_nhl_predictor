@@ -1,8 +1,12 @@
-# PSEUDOCODE for class-based agent
+import json
 import sqlite3
 from datetime import datetime
 
 import requests
+from rich.console import Console
+
+# Global
+console = Console()
 
 
 class NHLPredictorAgent:
@@ -96,16 +100,108 @@ class NHLPredictorAgent:
 
     def fetch_team_standings(self):
         """
-        TOOL: Get current NHL standings
+        Fetches all NHL teams and their current standings from the NHL API.
+        Stores data in both the cache (for quick access) and database (for persistence).
 
-        STEPS:
-        1. Make API request to standings endpoint
-        2. Parse team data
-        3. Store in self.teams_cache
-        4. Store in database
-        5. Return formatted data
+        Returns:
+            teams_cached: The in memory storage for team standings
         """
-        pass
+        console.print("[green]Fetching team standings from NHL API...[/green]")
+
+        url = f"{self.nhl_api_base}/v1/standings/now"
+        console.print(f"URL: {url}")
+
+        # Make API Request
+        try:
+            response = requests.get(url, timeout=10)
+
+            if response.status_code != 200:
+                console.print(
+                    f"[red] Error: API returned status code {response.status_code}[/red]"
+                )
+                return None
+
+            data = response.json()
+            console.print("[green]Successfully received data from API[/green]")
+        except requests.exceptions.Timeout:
+            console.print("[red]Error: request timed out[/red]")
+            return None
+        except requests.exceptions.RequestException as e:
+            console.print(f"[red]Error making request: {e}[/red]")
+
+        # Parse the Data
+
+        if "standings" not in data:
+            console.print("[red]Error: 'standings' key not found in API response[/red]")
+            console.print("   Available keys:", list(data.keys()))
+            return None
+
+        teams_data = data["standings"]
+        console.print(f"Found {len(teams_data)} teams in standings")
+
+        # Extract and store
+        cur = self.db_connection.cursor()
+        teams_stored = 0
+
+        for team in teams_data:
+            try:
+                # API nests data in default keys
+                # Extract the info from nested data
+                team_abv = team.get("teamAbbrev", {})
+                if isinstance(team_abv, dict):
+                    team_abv = team_abv.get("default", "UNK")
+
+                team_name = team.get("teamName", {})
+                if isinstance(team_name, dict):
+                    team_name = team_name.get("default", "Unkown")
+                else:
+                    team_name = str(team_name)
+
+                conference = team.get("conferenceName", "Unknown")
+                division = team.get("divisionName", "Unknown")
+
+                wins = team.get("wins", 0)
+                losses = team.get("losses", 0)
+                ot_losses = team.get("otLosses", 0)
+                points = team.get("points", 0)
+
+                # creating ID using the abbrevation
+                team_id = abs(hash(team_abv)) % (10**8)
+
+                # Store in Cache
+                self.teams_cache[team_abv] = {
+                    "id": team_id,
+                    "name": team_name,
+                    "abbrev": team_abv,
+                    "conference": conference,
+                    "division": division,
+                    "wins": wins,
+                    "losses": losses,
+                    "ot_losses": ot_losses,
+                    "points": points,
+                }
+
+                # Store in DB
+
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO teams
+                    (team_id, team_name, abbreviation, conference, division)
+                    VALUES (?, ?, ?, ?, ?)
+                """,
+                    (team_id, team_name, team_abv, conference, division),
+                )
+                teams_stored += 1
+            except Exception as e:
+                console.print(f"[red] Warning: Cound not process team: {e}")
+                continue
+        self.db_connection.commit()
+
+        console.print(f"Successfully stored {teams_stored} teams")
+        console.print(f"    - In cache: {len(self.teams_cache)} teams")
+        console.print(f"    - In database: {teams_stored} teams")
+
+        return self.teams_cache
 
     def fetch_todays_games(self):
         """
@@ -118,7 +214,34 @@ class NHLPredictorAgent:
         4. Store games in database
         5. Return list of games
         """
-        pass
+        current_date = datetime.now().strftime("%Y-%m-%d")
+
+        url = f"{self.nhl_api_base}/v1/schedule/{current_date}"
+        console.print(f"URL: {url}")
+
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code != 200:
+                console.print(
+                    f"[red] Error: API returned status code {response.status_code}[/red]"
+                )
+                return None
+
+            data = response.json()
+        except requests.exceptions.Timeout:
+            console.print("[red]Error: request timed out[/red]")
+            return None
+        except requests.exceptions.RequestException as e:
+            console.print(f"[red]Error making request: {e}[/red]")
+
+        todays_data = [
+            day for day in data.get("gameWeek", []) if day.get("date") == current_date
+        ]
+
+        todays_games = todays_data[0].get("games", []) if todays_data else []
+
+        with open("sample_schedule.json", "w") as f:
+            json.dump(todays_games, f, indent=2)
 
     def fetch_team_recent_games(self, team_id, num_games=5):
         """
@@ -144,6 +267,28 @@ class NHLPredictorAgent:
            - Recent form (last 5 games)
         3. Return stats dictionary
         """
+        pass
+
+    def ensure_complete_game_history(self, days_back=30):
+        """
+        Fill in any missing game data from the past N days
+        """
+        from datetime import timedelta
+
+        # STEP 1: Calculate date range
+        # - End date = today
+        # - Start date = today - days_back
+
+        # STEP 2: For each date in range:
+        #   - Query database: How many games on this date?
+        #   - If count < expected (usually 1-16 games per day):
+        #       - Fetch games for this date from API
+        #       - Store in database
+        #   - Print progress
+
+        # STEP 3: Print summary
+        # - "Found X games, added Y new games"
+
         pass
 
     # ===================
@@ -196,20 +341,15 @@ def main():
     """
     Entry point - creates and runs the agent
     """
-    print("🏒 NHL Game Predictor Agent - Phase 1")
-    print("=" * 50)
+    console.print("🏒 NHL Game Predictor Agent - Phase 1")
+    console.print("[blue]=[/blue]" * 50)
 
     # Create agent instance
     agent = NHLPredictorAgent()
 
-    # TODO Uncomment as these steps are avaliable
-    # Run data collection
-    # agent.collect_all_data()
+    console.print("[blue]=[/blue]" * 50)
 
-    # # Display today's games
-    # print("\n📅 Today's NHL Games:")
-    # agent.display_todays_games()
-
+    agent.fetch_team_standings()
     # Clean up
     agent.close()
 
