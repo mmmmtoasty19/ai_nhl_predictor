@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from rich.console import Console
@@ -385,23 +385,16 @@ class NHLPredictorAgent:
         """
         Fill in any missing game data from the past N days
         """
-        from datetime import timedelta
 
-        # STEP 1: Calculate date range
-        # - End date = today
-        # - Start date = today - days_back
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days_back)
 
-        # STEP 2: For each date in range:
-        #   - Query database: How many games on this date?
-        #   - If count < expected (usually 1-16 games per day):
-        #       - Fetch games for this date from API
-        #       - Store in database
-        #   - Print progress
+        current = start_date
+        while current <= end_date:
+            date_str = current.strftime("%Y-%m-%d")
 
-        # STEP 3: Print summary
-        # - "Found X games, added Y new games"
-
-        pass
+            self.fetch_games_by_date(date_str)
+            current += timedelta(days=1)
 
     # ===================
     # ACTION METHODS
