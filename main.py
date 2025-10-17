@@ -71,7 +71,7 @@ class NHLPredictorAgent:
                 away_score INTEGER,
                 game_state TEXT DEFAULT 'scheduled',
                 winner_id INTEGER,
-                win_type TEXT
+                win_type TEXT,
                 FOREIGN KEY (home_team_id) REFERENCES teams(team_id),
                 FOREIGN KEY (away_team_id) REFERENCES teams(team_id),
                 FOREIGN KEY (winner_id) REFERENCES teams(team_id)
@@ -397,7 +397,8 @@ class NHLPredictorAgent:
         result = cur.execute(
             """
             SELECT game_id, home_team_id, away_team_id, 
-            home_score, away_score, winner_id FROM games WHERE game_state = 'final'
+            home_score, away_score, winner_id, win_type 
+            FROM games WHERE game_state = 'final'
             AND (home_team_id = ? OR away_team_id = ?)
             ORDER BY game_date DESC
         """,
@@ -475,6 +476,7 @@ class NHLPredictorAgent:
             "goal_differential": goal_differential,
             "goals_per_game": goals_per_game,
             "goals_against_per_game": goals_against_per_game,
+            "overall_record": f"{total_wins}-{total_losses}-{overtime_losses}",
             "home_record": f"{home_wins}-{home_losses}-{home_ot_losses}",
             "away_record": f"{away_wins}-{away_losses}-{away_ot_losses}",
             # "last_10" : last_10
