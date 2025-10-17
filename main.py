@@ -1,4 +1,3 @@
-import json
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -40,6 +39,7 @@ class NHLPredictorAgent:
         (underscore prefix = private method)
         """
         self.db_connection = sqlite3.connect(self.db_path)
+        self.db_connection.row_factory = sqlite3.Row
         print(f"Connected to database: {self.db_path}")
 
     def _initialize_tables(self):
@@ -97,7 +97,7 @@ class NHLPredictorAgent:
     # ===================
     # TOOL METHODS
     # ===================
-
+    # TODO Update this to pull in type of win
     def fetch_games_by_date(self, date: str | None = None):
         """
         Get games scheduled for a specific date
@@ -147,6 +147,12 @@ class NHLPredictorAgent:
 
         for game in todays_games:
             try:
+                game_type = game.get("gameType")
+
+                # Skip Preseason games
+                if game_type == 1:
+                    continue
+
                 # Extract game info
                 game_id = game.get("id")
                 game_date = date
@@ -355,31 +361,146 @@ class NHLPredictorAgent:
 
         return self.teams_cache
 
-    def fetch_team_recent_games(self, team_id, num_games=5):
-        """
-        TOOL: Get recent game results for a team
-
-        STEPS:
-        1. Query database for team's recent games
-        2. If not enough games in DB, fetch from API
-        3. Return list of recent games with results
-        """
-        pass
-
+    # TODO Update this to include type of win
     def get_team_stats(self, team_id):
         """
         TOOL: Calculate team statistics
 
-        STEPS:
-        1. Query database for all team's games
-        2. Calculate:
-           - Win/loss record
-           - Goals per game
-           - Home vs away record
-           - Recent form (last 5 games)
-        3. Return stats dictionary
+        STEP 3: Loop through each game
+            FOR each game:
+
+                A. Determine if team was home or away
+                    IF game.home_team_id == team_id:
+                        team_was_home = True
+                        team_score = game.home_score
+                        opponent_score = game.away_score
+                    ELSE:
+                        team_was_home = False
+                        team_score = game.away_score
+                        opponent_score = game.home_score
+
+                B. Update goals
+                    goals_for += team_score
+                    goals_against += opponent_score
+
+                C. Determine if team won
+                    IF game.winner_id == team_id:
+                        total_wins += 1
+                        IF team_was_home:
+                            home_wins += 1
+                        ELSE:
+                            away_wins += 1
+                    ELSE:
+                        total_losses += 1
+                        IF team_was_home:
+                            home_losses += 1
+                        ELSE:
+                            away_losses += 1
+
+        STEP 4: Calculate derived stats
+            - total_games = total_wins + total_losses
+            - win_percentage = total_wins / total_games (handle divide by zero!)
+            - goals_per_game = goals_for / total_games
+            - goals_against_per_game = goals_against / total_games
+            - goal_differential = goals_for - goals_against
+
+        STEP 5: Calculate recent form (last 5-10 games)
+            - Take first 5 games from query (already sorted by date DESC)
+            - Count wins in those games
+            - recent_form = "3-2" or "W-W-L-W-L" format (your choice)
+
+        STEP 6: Return dictionary with all stats
+            RETURN {
+                'team_id': team_id,
+                'total_games': total_games,
+                'wins': total_wins,
+                'losses': total_losses,
+                'win_pct': win_percentage,
+                'goals_for': goals_for,
+                'goals_against': goals_against,
+                'goal_differential': goal_differential,
+                'goals_per_game': goals_per_game,
+                'goals_against_per_game': goals_against_per_game,
+                'home_record': f"{home_wins}-{home_losses}",
+                'away_record': f"{away_wins}-{away_losses}",
+                'recent_form': recent_form
+        }
         """
-        pass
+
+        cur = self.db_connection.cursor()
+        result = cur.execute(
+            """
+            SELECT game_id, home_team_id, away_team_id, 
+            home_score, away_score, winner_id FROM games WHERE game_state = 'final'
+            AND (home_team_id = ? OR away_team_id = ?)
+            ORDER BY game_date DESC
+        """,
+            (team_id, team_id),
+        )
+
+        # console.print(result.fetchall())
+
+        # Initialize stat counters
+        total_wins = 0
+        total_losses = 0
+        goals_for = 0
+        goals_against = 0
+        home_wins = 0
+        home_losses = 0
+        away_wins = 0
+        away_losses = 0
+
+        for game in result.fetchall():
+            if game["home_team_id"] == team_id:
+                team_was_home = True
+                team_score = game["home_score"]
+                opponent_score = game["away_score"]
+            else:
+                team_was_home = False
+                team_score = game["away_score"]
+                opponent_score = game["home_score"]
+
+            goals_for += team_score
+            goals_against += opponent_score
+
+            if game["winner_id"] == team_id:
+                total_wins += 1
+                if team_was_home:
+                    home_wins += 1
+                else:
+                    away_wins += 1
+            else:
+                total_losses += 1
+                if team_was_home:
+                    home_losses += 1
+                else:
+                    away_losses += 1
+
+        # Derived Stats
+        # TODO fix points percentage once OT losses are included
+        total_games = total_wins + total_losses
+        points_percentage = (total_wins * 2) / (total_games * 2)
+        goals_per_game = goals_for / total_games
+        goals_against_per_game = goals_against / total_games
+        goal_differential = goals_for - goals_against
+
+        # TODO Calculate Last 10
+
+        return {
+            "team_id": team_id,
+            "total_games": total_games,
+            "wins": total_wins,
+            "losses": total_losses,
+            "points_percentage": points_percentage,
+            "goals_for": goals_for,
+            "goals_against": goals_against,
+            "goal_differential": goal_differential,
+            "goals_per_game": goals_per_game,
+            "goals_against_per_game": goals_against_per_game,
+            "home_record": f"{home_wins}-{home_losses}",
+            "away_record": f"{away_wins}-{away_losses}",
+            # "last_10" : last_10
+        }
 
     def ensure_complete_game_history(self, days_back=30):
         """
@@ -417,7 +538,7 @@ class NHLPredictorAgent:
 
     def display_todays_games(self):
         """
-        ACTION: Show user today's matchups
+        ACTION: Show user today's matchup's
 
         STEPS:
         1. Get today's games
