@@ -71,6 +71,7 @@ class NHLPredictorAgent:
                 away_score INTEGER,
                 game_state TEXT DEFAULT 'scheduled',
                 winner_id INTEGER,
+                win_type TEXT
                 FOREIGN KEY (home_team_id) REFERENCES teams(team_id),
                 FOREIGN KEY (away_team_id) REFERENCES teams(team_id),
                 FOREIGN KEY (winner_id) REFERENCES teams(team_id)
@@ -97,7 +98,6 @@ class NHLPredictorAgent:
     # ===================
     # TOOL METHODS
     # ===================
-    # TODO Update this to pull in type of win
     def fetch_games_by_date(self, date: str | None = None):
         """
         Get games scheduled for a specific date
@@ -217,13 +217,16 @@ class NHLPredictorAgent:
                 ):
                     winner_id = home_id if home_score > away_score else away_id
 
+                # Determine type of WIN
+                win_type = game.get("gameOutcome", {}).get("lastPeriodType", "REG")
+
                 # Store game
                 cur.execute(
                     """
                     INSERT OR REPLACE INTO games
                     (game_id, game_date, home_team_id, away_team_id, 
-                    home_score, away_score, game_state, winner_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    home_score, away_score, game_state, winner_id, win_type)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         game_id,
@@ -234,6 +237,7 @@ class NHLPredictorAgent:
                         away_score,
                         game_state,
                         winner_id,
+                        win_type,
                     ),
                 )
 
@@ -361,48 +365,10 @@ class NHLPredictorAgent:
 
         return self.teams_cache
 
-    # TODO Update this to include type of win
     def get_team_stats(self, team_id):
         """
         TOOL: Calculate team statistics
 
-        STEP 3: Loop through each game
-            FOR each game:
-
-                A. Determine if team was home or away
-                    IF game.home_team_id == team_id:
-                        team_was_home = True
-                        team_score = game.home_score
-                        opponent_score = game.away_score
-                    ELSE:
-                        team_was_home = False
-                        team_score = game.away_score
-                        opponent_score = game.home_score
-
-                B. Update goals
-                    goals_for += team_score
-                    goals_against += opponent_score
-
-                C. Determine if team won
-                    IF game.winner_id == team_id:
-                        total_wins += 1
-                        IF team_was_home:
-                            home_wins += 1
-                        ELSE:
-                            away_wins += 1
-                    ELSE:
-                        total_losses += 1
-                        IF team_was_home:
-                            home_losses += 1
-                        ELSE:
-                            away_losses += 1
-
-        STEP 4: Calculate derived stats
-            - total_games = total_wins + total_losses
-            - win_percentage = total_wins / total_games (handle divide by zero!)
-            - goals_per_game = goals_for / total_games
-            - goals_against_per_game = goals_against / total_games
-            - goal_differential = goals_for - goals_against
 
         STEP 5: Calculate recent form (last 5-10 games)
             - Take first 5 games from query (already sorted by date DESC)
@@ -443,12 +409,15 @@ class NHLPredictorAgent:
         # Initialize stat counters
         total_wins = 0
         total_losses = 0
+        overtime_losses = 0
         goals_for = 0
         goals_against = 0
         home_wins = 0
         home_losses = 0
+        home_ot_losses = 0
         away_wins = 0
         away_losses = 0
+        away_ot_losses = 0
 
         for game in result.fetchall():
             if game["home_team_id"] == team_id:
@@ -470,16 +439,23 @@ class NHLPredictorAgent:
                 else:
                     away_wins += 1
             else:
-                total_losses += 1
-                if team_was_home:
-                    home_losses += 1
+                if game["win_type"] == "REG":
+                    total_losses += 1
+                    if team_was_home:
+                        home_losses += 1
+                    else:
+                        away_losses += 1
                 else:
-                    away_losses += 1
+                    overtime_losses += 1
+                    if team_was_home:
+                        home_ot_losses += 1
+                    else:
+                        away_ot_losses += 1
 
         # Derived Stats
-        # TODO fix points percentage once OT losses are included
         total_games = total_wins + total_losses
-        points_percentage = (total_wins * 2) / (total_games * 2)
+        points = (total_wins * 2) + overtime_losses
+        points_percentage = points / (total_games * 2)
         goals_per_game = goals_for / total_games
         goals_against_per_game = goals_against / total_games
         goal_differential = goals_for - goals_against
@@ -491,14 +467,16 @@ class NHLPredictorAgent:
             "total_games": total_games,
             "wins": total_wins,
             "losses": total_losses,
+            "overtime_losses": overtime_losses,
+            "points": points,
             "points_percentage": points_percentage,
             "goals_for": goals_for,
             "goals_against": goals_against,
             "goal_differential": goal_differential,
             "goals_per_game": goals_per_game,
             "goals_against_per_game": goals_against_per_game,
-            "home_record": f"{home_wins}-{home_losses}",
-            "away_record": f"{away_wins}-{away_losses}",
+            "home_record": f"{home_wins}-{home_losses}-{home_ot_losses}",
+            "away_record": f"{away_wins}-{away_losses}-{away_ot_losses}",
             # "last_10" : last_10
         }
 
