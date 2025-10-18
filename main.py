@@ -497,36 +497,72 @@ class NHLPredictorAgent:
             self.fetch_games_by_date(date_str)
             current += timedelta(days=1)
 
+    def make_prediction(self, game_id: int):
+        cur = self.db_connection.cursor()
+
+        game = cur.execute(
+            """
+            SELECT home_team_id, away_team_id, game_state FROM games
+            WHERE game_id = ?
+        """,
+            (game_id,),
+        ).fetchone()
+
+        if game["game_state"] != "scheduled":
+            console.print(" Cannot predict game that has already started/finished")
+            return None
+
+        prediction_exist = cur.execute(
+            """ 
+            SELECT * FROM predictions
+            WHERE game_id = ?
+        """,
+            (game_id,),
+        ).fetchone()
+
+        if prediction_exist:
+            console.print("Prediction exists for this game already")
+            return prediction_exist
+
+        home_stats = self.get_team_stats(game["home_team_id"])
+        away_stats = self.get_team_stats(game["away_team_id"])
+
+        # TODO Handle Edge cases ie no stats
+
+        # Calculate Prediction (MVP)
+        # TODO This is the MVP Algorithm it needs to be updated
+        home_score = home_stats["points_percentage"] + 0.08  # HOME ICe
+        away_score = away_stats["points_percentage"]
+
+        if home_score > away_score:
+            predicted_winner = game["home_team_id"]
+        else:
+            predicted_winner = game["away_team_id"]
+
+        confidence = abs(home_score - away_score)
+
+        # TODO Store in Database
+
+        return {
+            "game_id": game_id,
+            "home_team": game["home_team_id"],
+            "away_team": game["away_team_id"],
+            "predicted_winner": predicted_winner,
+            "confidence": confidence,
+        }
+
     # ===================
     # ACTION METHODS
     # ===================
 
-    def collect_all_data(self):
-        """
-        ACTION: Collect and store all NHL data
-
-        STEPS:
-        1. Print status: "Collecting team standings..."
-        2. Call fetch_team_standings()
-        3. Print status: "Collecting today's games..."
-        4. Call fetch_todays_games()
-        5. Print status: "Collecting recent games for each team..."
-        6. For each team, call fetch_team_recent_games()
-        7. Print summary of data collected
-        """
+    def predict_todays_games():
         pass
 
-    def display_todays_games(self):
-        """
-        ACTION: Show user today's matchup's
+    def evaluate_predictions():
+        pass
 
-        STEPS:
-        1. Get today's games
-        2. For each game:
-           - Print matchup (Team A vs Team B)
-           - Print game time
-           - Print venue
-        """
+    # TODO add this post MVP product using as a placeholder for now
+    def show_prediction_stats():
         pass
 
     def close(self):
