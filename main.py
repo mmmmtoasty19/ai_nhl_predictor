@@ -368,29 +368,6 @@ class NHLPredictorAgent:
     def get_team_stats(self, team_id):
         """
         TOOL: Calculate team statistics
-
-
-        STEP 5: Calculate recent form (last 5-10 games)
-            - Take first 5 games from query (already sorted by date DESC)
-            - Count wins in those games
-            - recent_form = "3-2" or "W-W-L-W-L" format (your choice)
-
-        STEP 6: Return dictionary with all stats
-            RETURN {
-                'team_id': team_id,
-                'total_games': total_games,
-                'wins': total_wins,
-                'losses': total_losses,
-                'win_pct': win_percentage,
-                'goals_for': goals_for,
-                'goals_against': goals_against,
-                'goal_differential': goal_differential,
-                'goals_per_game': goals_per_game,
-                'goals_against_per_game': goals_against_per_game,
-                'home_record': f"{home_wins}-{home_losses}",
-                'away_record': f"{away_wins}-{away_losses}",
-                'recent_form': recent_form
-        }
         """
 
         cur = self.db_connection.cursor()
@@ -497,6 +474,29 @@ class NHLPredictorAgent:
             self.fetch_games_by_date(date_str)
             current += timedelta(days=1)
 
+    def _calculate_team_score(self, team_stats, is_home=False):
+        # base score using teams Points Percentage
+        base_score = team_stats["points_percentage"]
+
+        if is_home:
+            base_score += 0.08
+
+        # add Goal Differential
+        gdiff_factor = team_stats["goal_differential"] / 50
+
+        record = team_stats["home_record"] if is_home else team_stats["away_record"]
+
+        wins, losses, ot_losses = map(int, record.split("-"))
+        points = (wins * 2) + ot_losses
+        games = wins + losses + ot_losses
+        record_points_pct = points / (games * 2) if games > 0 else 0
+
+        venue_advantage = record_points_pct - team_stats["points_percentage"]
+
+        total_score = base_score + gdiff_factor + venue_advantage
+
+        return total_score
+
     def make_prediction(self, game_id: int):
         cur = self.db_connection.cursor()
 
@@ -522,17 +522,13 @@ class NHLPredictorAgent:
 
         if prediction_exist:
             console.print("Prediction exists for this game already")
-            return prediction_exist
+            return None
 
         home_stats = self.get_team_stats(game["home_team_id"])
         away_stats = self.get_team_stats(game["away_team_id"])
 
-        # TODO Handle Edge cases ie no stats
-
-        # Calculate Prediction (MVP)
-        # TODO This is the MVP Algorithm it needs to be updated
-        home_score = home_stats["points_percentage"] + 0.08  # HOME ICe
-        away_score = away_stats["points_percentage"]
+        home_score = self._calculate_team_score(home_stats, is_home=True)
+        away_score = self._calculate_team_score(away_stats, is_home=False)
 
         if home_score > away_score:
             predicted_winner = game["home_team_id"]
@@ -541,7 +537,19 @@ class NHLPredictorAgent:
 
         confidence = abs(home_score - away_score)
 
-        # TODO Store in Database
+        # Store Prediction
+        prediction_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        cur.execute(
+            """
+            INSERT INTO predictions (
+            game_id, predicted_winner_id, confidence, prediction_date, correct
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (game_id, predicted_winner, confidence, prediction_date, None),
+        )
+
+        self.db_connection.commit()
 
         return {
             "game_id": game_id,
@@ -554,11 +562,133 @@ class NHLPredictorAgent:
     # ===================
     # ACTION METHODS
     # ===================
+    # TODO instead of today, allow user to choose what to predict, maybe even future?
+    def predict_todays_games(self):
+        date = datetime.now().strftime("%Y-%m-%d")
 
-    def predict_todays_games():
-        pass
+        cur = self.db_connection.cursor()
+
+        games = cur.execute(
+            """
+            SELECT game_id, home_team_id, away_team_id FROM games
+            WHERE game_date = ? AND game_state = 'scheduled'
+            """,
+            (date,),
+        ).fetchall()
+
+        if not games:
+            print("No scheduled games found for today")
+            return 0
+
+        predictions_made = 0
+        predictions_skipped = 0
+
+        for game in games:
+            game_id = game["game_id"]
+
+            prediction = self.make_prediction(game_id)
+
+            if prediction is not None:
+                predictions_made += 1
+
+                home_id = prediction["home_team"]
+                away_id = prediction["away_team"]
+                winner_id = prediction["predicted_winner"]
+                confidence_pct = prediction["confidence"] * 100
+
+                home_team = cur.execute(
+                    "SELECT team_name, abbreviation FROM teams WHERE team_id = ?",
+                    (home_id,),
+                ).fetchone()
+
+                away_team = cur.execute(
+                    "SELECT team_name, abbreviation FROM teams WHERE team_id = ?",
+                    (away_id,),
+                ).fetchone()
+
+                home_abbrev = (
+                    home_team["abbreviation"] if home_team else f"Team {home_id}"
+                )
+                away_abbrev = (
+                    away_team["abbreviation"] if away_team else f"Team {away_id}"
+                )
+
+                # Determine winner and loser for nice display
+                if winner_id == home_id:
+                    winner_abbrev = home_abbrev
+                    loser_abbrev = away_abbrev
+                else:
+                    winner_abbrev = away_abbrev
+                    loser_abbrev = home_abbrev
+
+                console.print(
+                    f"[green]Predicted:[/green] {winner_abbrev} over {loser_abbrev} "
+                    f"({confidence_pct:.1f}% confidence)"
+                )
+
+            else:
+                predictions_skipped += 1
+
+        console.print(f"\n[cyan]Made {predictions_made} predictions[/cyan]")
+        if predictions_skipped > 0:
+            console.print(
+                f"[yellow]Skipped {predictions_skipped} games "
+                f"(already predicted or insufficient data)[/yellow]"
+            )
 
     def evaluate_predictions():
+        """STEP 1: Find predictions that need evaluation
+            - Query:
+                SELECT
+                    p.prediction_id,
+                    p.game_id,
+                    p.predicted_winner_id,
+                    g.winner_id,
+                    g.game_state
+                FROM predictions p
+                JOIN games g ON p.game_id = g.game_id
+                WHERE p.correct IS NULL  -- not yet evaluated
+                AND g.game_state = 'final'  -- game finished
+
+        STEP 2: Check if there's anything to evaluate
+            - IF no results:
+                - print "No predictions ready for evaluation"
+                - RETURN None
+
+        STEP 3: Evaluate each prediction
+            - evaluated_count = 0
+            - correct_count = 0
+
+            - FOR each prediction:
+                - IF predicted_winner_id == actual winner_id:
+                    - is_correct = 1
+                    - correct_count += 1
+                - ELSE:
+                    - is_correct = 0
+
+                - UPDATE predictions
+                  SET correct = ?
+                  WHERE prediction_id = ?
+
+                - evaluated_count += 1
+
+            - Commit changes to database
+
+        STEP 4: Calculate and display accuracy
+            - print "Evaluated {evaluated_count} predictions"
+            - print "Correct: {correct_count}"
+            - print "Wrong: {evaluated_count - correct_count}"
+
+            - accuracy = (correct_count / evaluated_count) * 100
+            - print "Accuracy: {accuracy:.1f}%"
+
+        STEP 5: Return evaluation summary
+            - RETURN {
+                'evaluated': evaluated_count,
+                'correct': correct_count,
+                'wrong': evaluated_count - correct_count,
+                'accuracy': accuracy
+              }"""
         pass
 
     # TODO add this post MVP product using as a placeholder for now
@@ -579,6 +709,7 @@ class NHLPredictorAgent:
 # ===================
 
 
+# TODO MVP Update to be a loop, or give user options to choose from
 def main():
     """
     Entry point - creates and runs the agent
