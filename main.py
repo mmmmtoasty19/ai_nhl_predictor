@@ -481,8 +481,8 @@ class NHLPredictorAgent:
         if is_home:
             base_score += 0.08
 
-        # add Goal Differential
-        gdiff_factor = team_stats["goal_differential"] / 50
+        # add Goal Differential capped at +/- 0.15
+        gdiff_factor = max(-0.15, min(0.15, team_stats["goal_differential"] / 100))
 
         record = team_stats["home_record"] if is_home else team_stats["away_record"]
 
