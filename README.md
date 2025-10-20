@@ -1,0 +1,1 @@
+Force Mode allows to update predictions for troubleshoting and debugging code - storing this note for later Readme

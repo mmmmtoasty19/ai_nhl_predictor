@@ -497,7 +497,7 @@ class NHLPredictorAgent:
 
         return total_score
 
-    def make_prediction(self, game_id: int):
+    def make_prediction(self, game_id: int, force=False):
         cur = self.db_connection.cursor()
 
         game = cur.execute(
@@ -520,9 +520,13 @@ class NHLPredictorAgent:
             (game_id,),
         ).fetchone()
 
-        if prediction_exist:
+        if prediction_exist and not force:
             console.print("Prediction exists for this game already")
             return None
+
+        if prediction_exist and force:
+            cur.execute("DELETE FROM predictions WHERE game_id = ?", (game_id,))
+            console.print("[yellow]Overwriting existing prediction...[/yellow]")
 
         home_stats = self.get_team_stats(game["home_team_id"])
         away_stats = self.get_team_stats(game["away_team_id"])
@@ -559,11 +563,30 @@ class NHLPredictorAgent:
             "confidence": confidence,
         }
 
+    def clear_predictions(self, game_id=None):
+        """
+        Clear predictions for testing
+
+        Args:
+            game_id: If provided, clear only this game's prediction
+                        If None, clear ALL predictions
+        """
+        cur = self.db_connection.cursor()
+
+        if game_id:
+            cur.execute("DELETE FROM predictions WHERE game_id = ?", (game_id,))
+            console.print(f"[yellow]Cleared prediction for game {game_id}[/yellow]")
+        else:
+            cur.execute("DELETE FROM predictions")
+            console.print("[yellow]Cleared ALL predictions[/yellow]")
+
+        self.db_connection.commit()
+
     # ===================
     # ACTION METHODS
     # ===================
     # TODO instead of today, allow user to choose what to predict, maybe even future?
-    def predict_todays_games(self):
+    def predict_todays_games(self, force=False):
         date = datetime.now().strftime("%Y-%m-%d")
 
         cur = self.db_connection.cursor()
@@ -586,7 +609,7 @@ class NHLPredictorAgent:
         for game in games:
             game_id = game["game_id"]
 
-            prediction = self.make_prediction(game_id)
+            prediction = self.make_prediction(game_id, force=force)
 
             if prediction is not None:
                 predictions_made += 1
