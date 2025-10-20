@@ -493,6 +493,9 @@ class NHLPredictorAgent:
 
         venue_advantage = record_points_pct - team_stats["points_percentage"]
 
+        # Cap Advantage at 0.1
+        venue_advantage = max(-0.10, min(0.10, venue_advantage))
+
         total_score = base_score + gdiff_factor + venue_advantage
 
         return total_score
