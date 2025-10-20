@@ -663,63 +663,86 @@ class NHLPredictorAgent:
             )
 
     def evaluate_predictions():
-        """STEP 1: Find predictions that need evaluation
-            - Query:
-                SELECT
-                    p.prediction_id,
-                    p.game_id,
-                    p.predicted_winner_id,
-                    g.winner_id,
-                    g.game_state
-                FROM predictions p
-                JOIN games g ON p.game_id = g.game_id
-                WHERE p.correct IS NULL  -- not yet evaluated
-                AND g.game_state = 'final'  -- game finished
-
-        STEP 2: Check if there's anything to evaluate
-            - IF no results:
-                - print "No predictions ready for evaluation"
-                - RETURN None
-
-        STEP 3: Evaluate each prediction
-            - evaluated_count = 0
-            - correct_count = 0
-
-            - FOR each prediction:
-                - IF predicted_winner_id == actual winner_id:
-                    - is_correct = 1
-                    - correct_count += 1
-                - ELSE:
-                    - is_correct = 0
-
-                - UPDATE predictions
-                  SET correct = ?
-                  WHERE prediction_id = ?
-
-                - evaluated_count += 1
-
-            - Commit changes to database
-
-        STEP 4: Calculate and display accuracy
-            - print "Evaluated {evaluated_count} predictions"
-            - print "Correct: {correct_count}"
-            - print "Wrong: {evaluated_count - correct_count}"
-
-            - accuracy = (correct_count / evaluated_count) * 100
-            - print "Accuracy: {accuracy:.1f}%"
-
-        STEP 5: Return evaluation summary
-            - RETURN {
-                'evaluated': evaluated_count,
-                'correct': correct_count,
-                'wrong': evaluated_count - correct_count,
-                'accuracy': accuracy
-              }"""
         pass
 
     # TODO add this post MVP product using as a placeholder for now
-    def show_prediction_stats():
-        pass
+    def show_prediction_stats(self):
+        """
+        Check predictions against actual results
+        Updates 'correct' column for finished games
+        """
+
+        cur = self.db_connection.cursor()
+
+        # Find predictions that need evaluation
+        predictions_to_evaluate = cur.execute(
+            """
+            SELECT 
+                p.prediction_id,
+                p.game_id,
+                p.predicted_winner_id,
+                g.winner_id,
+                g.home_team_id,
+                g.away_team_id
+            FROM predictions p
+            JOIN games g ON p.game_id = g.game_id
+            WHERE p.correct IS NULL
+            AND g.game_state = 'final'
+            """
+        ).fetchall()
+
+        # Check if there's anything to evaluate
+        if not predictions_to_evaluate:
+            console.print("[yellow]No predictions ready for evaluation[/yellow]")
+            return None
+
+        # Evaluate each prediction
+        evaluated_count = 0
+        correct_count = 0
+
+        for prediction in predictions_to_evaluate:
+            prediction_id = prediction["prediction_id"]
+            predicted_winner = prediction["predicted_winner_id"]
+            actual_winner = prediction["winner_id"]
+
+            # Check if prediction was correct
+            if predicted_winner == actual_winner:
+                is_correct = 1
+                correct_count += 1
+            else:
+                is_correct = 0
+
+            # Update the prediction
+            cur.execute(
+                """
+                UPDATE predictions 
+                SET correct = ?
+                WHERE prediction_id = ?
+                """,
+                (is_correct, prediction_id),
+            )
+
+            evaluated_count += 1
+
+        # Commit all updates
+        self.db_connection.commit()
+
+        # Calculate and display accuracy
+        wrong_count = evaluated_count - correct_count
+        accuracy = (correct_count / evaluated_count) * 100 if evaluated_count > 0 else 0
+
+        console.print(f"\n[cyan]Evaluated {evaluated_count} predictions[/cyan]")
+        console.print(f"[green]Correct: {correct_count}[/green]")
+        console.print(f"[red]Wrong: {wrong_count}[/red]")
+        console.print(f"[bold]Accuracy: {accuracy:.1f}%[/bold]")
+
+        # Return evaluation summary
+        return {
+            "evaluated": evaluated_count,
+            "correct": correct_count,
+            "wrong": wrong_count,
+            "accuracy": accuracy,
+        }
 
     def close(self):
         """
