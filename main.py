@@ -662,11 +662,7 @@ class NHLPredictorAgent:
                 f"(already predicted or insufficient data)[/yellow]"
             )
 
-    def evaluate_predictions():
-        pass
-
-    # TODO add this post MVP product using as a placeholder for now
-    def show_prediction_stats(self):
+    def evaluate_predictions(self):
         """
         Check predictions against actual results
         Updates 'correct' column for finished games
@@ -744,6 +740,96 @@ class NHLPredictorAgent:
             "accuracy": accuracy,
         }
 
+    # TODO add this post MVP product using as a placeholder for now
+    def show_prediction_stats(self):
+        cur = self.db_connection.cursor()
+
+        predictions = cur.execute("""
+            SELECT confidence, correct FROM predictions 
+            WHERE correct IS NOT NULL
+            """).fetchall()
+
+        if not predictions:
+            console.print("No predictions evaluated yet")
+            return None
+
+        # Calculate overall stats
+        total = len(predictions)
+        correct = sum(1 for pred in predictions if pred["correct"] == 1)
+        wrong = total - correct
+        accuracy = (correct / total) * 100
+
+        # Print overall stats first
+        console.print("\n[bold cyan]═══ Overall Prediction Performance ═══[/bold cyan]")
+        console.print(f"Total Predictions: {total}")
+        console.print(f"[green]Correct: {correct}[/green]")
+        console.print(f"[red]Wrong: {wrong}[/red]")
+        console.print(f"[bold]Overall Accuracy: {accuracy:.1f}%[/bold]")
+
+        # Initialize counters for each bucket
+        low_total = 0
+        low_correct = 0
+        medium_total = 0
+        medium_correct = 0
+        high_total = 0
+        high_correct = 0
+
+        for pred in predictions:
+            confidence = pred["confidence"]
+            is_correct = pred["correct"]
+
+            if confidence < 0.30:
+                low_total += 1
+                if is_correct == 1:
+                    low_correct += 1
+            elif confidence < 0.60:
+                medium_total += 1
+                if is_correct == 1:
+                    medium_correct += 1
+            else:
+                high_total += 1
+                if is_correct == 1:
+                    high_correct += 1
+
+        # Print breakdown by confidence
+        console.print("\n[bold cyan]Breakdown by Confidence Level:[/bold cyan]")
+
+        # Low confidence
+        if low_total > 0:
+            low_accuracy = (low_correct / low_total) * 100
+            console.print(
+                f"Low confidence (0-30%): {low_correct}/{low_total} "
+                f"correct ({low_accuracy:.1f}%)"
+            )
+
+        # Medium confidence
+        if medium_total > 0:
+            medium_accuracy = (medium_correct / medium_total) * 100
+            console.print(
+                f"Medium confidence (30-60%): {medium_correct}/{medium_total} "
+                f"correct ({medium_accuracy:.1f}%)"
+            )
+
+        # High confidence
+        if high_total > 0:
+            high_accuracy = (high_correct / high_total) * 100
+            console.print(
+                f"High confidence (60%+): {high_correct}/{high_total} "
+                f"correct ({high_accuracy:.1f}%)"
+            )
+
+        return {
+            "total": total,
+            "correct": correct,
+            "wrong": wrong,
+            "accuracy": accuracy,
+            "by_confidence": {
+                "low": {"total": low_total, "correct": low_correct},
+                "medium": {"total": medium_total, "correct": medium_correct},
+                "high": {"total": high_total, "correct": high_correct},
+            },
+        }
+
     def close(self):
         """
         TASK: Clean up - close database connection
@@ -773,9 +859,15 @@ def main():
     console.print("[blue]=[/blue]" * 50)
     agent.fetch_games_by_date()
 
-    console.print("\n[cyan]Step 2: Enriching teams with standings...[/cyan]")
-    console.print("[blue]=[/blue]" * 50)
-    agent.enrich_teams_with_standings()
+    """ TODO THis is really only needed at the begining to fill in the teams table with 
+     conference and Division """
+    # console.print("\n[cyan]Step 2: Enriching teams with standings...[/cyan]")
+    # console.print("[blue]=[/blue]" * 50)
+    # agent.enrich_teams_with_standings()
+
+    agent.evaluate_predictions()
+    agent.predict_todays_games()
+    agent.show_prediction_stats()
 
     # Clean up
     agent.close()
