@@ -859,6 +859,10 @@ def main():
     console.print("[blue]=[/blue]" * 50)
     agent.fetch_games_by_date()
 
+    console.print("\n[cyan]Step 2: Updating Previous Days Games...[/cyan]")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    agent.fetch_games_by_date(yesterday)
+
     """ TODO THis is really only needed at the begining to fill in the teams table with 
      conference and Division """
     # console.print("\n[cyan]Step 2: Enriching teams with standings...[/cyan]")
